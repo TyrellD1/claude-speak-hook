@@ -9,6 +9,8 @@ Settings (env vars, e.g. in the "env" block of ~/.claude/settings.json):
   SPEAK_VOICE              a `say -v` voice name (default: system voice)
   SPEAK_RATE               words per minute (default: system rate)
   SPEAK_MAX_CHARS          without a summary, cut the text here (default 1500, 0 = no limit)
+  SPEAK_TITLE              "false" to stop announcing the session name first (default on)
+  SPEAK_TITLE_VOICE        voice for the session name (default "Daniel")
 
   SPEAK_SUMMARY            "1"/"true" to speak a short summary instead of the reply itself
   SPEAK_SUMMARY_MODEL      model for the summary (default "haiku")
@@ -42,8 +44,13 @@ LOCK_FILE = os.path.join(STATE_DIR, "claude-speak-hook.lock")
 CHILD_FLAG = "SPEAK_HOOK_CHILD"
 
 
-def env_bool(name: str) -> bool:
-    return os.environ.get(name, "").strip().lower() in ("1", "true", "yes", "on")
+def env_bool(name: str, default: bool = False) -> bool:
+    value = os.environ.get(name, "").strip().lower()
+    if value in ("1", "true", "yes", "on"):
+        return True
+    if value in ("0", "false", "no", "off"):
+        return False
+    return default
 
 
 def env_int(name: str, default: int) -> int:
@@ -99,16 +106,22 @@ def tail(text: str, n: int) -> str:
 
 # ---------- speaking ----------
 
-def speak_now(text: str) -> None:
-    """Wait for our turn in the queue, then speak and block until done."""
+def say(text: str, voice: str) -> None:
     cmd = ["say"]
-    if os.environ.get("SPEAK_VOICE"):
-        cmd += ["-v", os.environ["SPEAK_VOICE"]]
+    if voice:
+        cmd += ["-v", voice]
     if os.environ.get("SPEAK_RATE"):
         cmd += ["-r", os.environ["SPEAK_RATE"]]
+    subprocess.run(cmd, input=text.encode(), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def speak_now(text: str, title: str = "") -> None:
+    """Wait for our turn in the queue, then speak (session name first) and block until done."""
     with open(LOCK_FILE, "a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)  # released when this process lets go of the file
-        subprocess.run(cmd, input=text.encode(), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if title:
+            say(title, os.environ.get("SPEAK_TITLE_VOICE", "Daniel"))
+        say(text, os.environ.get("SPEAK_VOICE", ""))
 
 
 def spawn(*args: str) -> None:
@@ -120,11 +133,30 @@ def spawn(*args: str) -> None:
     )
 
 
-def speak(text: str) -> None:
-    fd, path = tempfile.mkstemp(prefix="claude-speak-", suffix=".txt")
+def speak(text: str, title: str = "") -> None:
+    fd, path = tempfile.mkstemp(prefix="claude-speak-", suffix=".json")
     with os.fdopen(fd, "w") as f:
-        f.write(text)
+        json.dump({"text": text, "title": title}, f)
     spawn("--say", path)
+
+
+def read_title(transcript_path: str) -> str:
+    """The session's name as the app shows it: the last title written to the transcript."""
+    if not env_bool("SPEAK_TITLE", True):
+        return ""
+    title = ""
+    try:
+        with open(transcript_path) as f:
+            for line in f:
+                if '"custom-title"' in line or '"agent-name"' in line:
+                    try:
+                        d = json.loads(line)
+                    except ValueError:
+                        continue
+                    title = d.get("customTitle") or d.get("agentName") or title
+    except OSError:
+        pass
+    return title.strip()
 
 
 def latest_file(session_id: str) -> str:
@@ -231,7 +263,7 @@ def worker(payload_path: str) -> int:
                 return 0  # this session sent a newer reply while we were summarizing
     except OSError:
         pass
-    speak_now(text)
+    speak_now(text, job.get("title", ""))
     return 0
 
 
@@ -242,9 +274,9 @@ def main() -> int:
         return worker(sys.argv[2])
     if len(sys.argv) == 3 and sys.argv[1] == "--say":
         with open(sys.argv[2]) as f:
-            text = f.read()
+            msg = json.load(f)
         os.unlink(sys.argv[2])
-        speak_now(text)
+        speak_now(msg["text"], msg.get("title", ""))
         return 0
     if os.environ.get(CHILD_FLAG) or not os.path.exists(ON_FILE):
         return 0
@@ -263,15 +295,17 @@ def main() -> int:
     with open(latest_file(session_id), "w") as f:
         f.write(token)
 
+    title = read_title(data.get("transcript_path", ""))
+
     if not env_bool("SPEAK_SUMMARY") or len(clean(reply)) < env_int("SPEAK_SUMMARY_MIN_CHARS", 400):
-        speak(truncate(clean(reply)))
+        speak(truncate(clean(reply)), title)
         return 0
 
     # Summarizing takes a few seconds, so hand it to a detached worker and return now.
     fd, path = tempfile.mkstemp(prefix="claude-speak-", suffix=".json")
     with os.fdopen(fd, "w") as f:
         json.dump({"reply": reply, "transcript_path": data.get("transcript_path", ""),
-                   "token": token, "session_id": session_id}, f)
+                   "token": token, "session_id": session_id, "title": title}, f)
     spawn("--worker", path)
     return 0
 

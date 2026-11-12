@@ -62,6 +62,8 @@ Set these in the `env` block of `~/.claude/settings.json`.
 | `SPEAK_SUMMARY_WORDS` | `60` | Maximum length of the summary in words |
 | `SPEAK_SUMMARY_MIN_CHARS` | `400` | Replies shorter than this are read in full |
 | `SPEAK_MAX_CHARS` | `1500` | Without a summary, where to cut the reply (`0` = no limit) |
+| `SPEAK_TITLE` | on | Announce the session's name before each message; `false` turns it off |
+| `SPEAK_TITLE_VOICE` | `Daniel` | Voice for the session name, so it stands apart from the message |
 | `SPEAK_VOICE` | system voice | Any name from `say -v '?'` |
 | `SPEAK_RATE` | system rate | Words per minute |
 | `SPEAK_CLAUDE_BIN` | found on `PATH` | Path to the `claude` command |
