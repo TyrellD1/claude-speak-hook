@@ -16,6 +16,8 @@ ln -s "$PWD/speak.py" ~/.claude/hooks/speak.py
 touch ~/.claude/speak.on
 ```
 
+Tyrell's copy lives in `/Users/Shared/claude-speak-hook` so two Mac users can share it. See `CLAUDE.md`.
+
 Then add the hook to `~/.claude/settings.json`:
 
 ```json
